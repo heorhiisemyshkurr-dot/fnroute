@@ -1,0 +1,16 @@
+[package]
+name = "fnroute"
+version = "0.1.0"
+edition = "2021"
+description = "Маршрутизатор трафика Fortnite: замеры, выбор аплинка, QoS и откат"
+
+[dependencies]
+# Снимок «как было» переживает перезагрузку — значит, лежит файлом на диске.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
