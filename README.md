@@ -1,109 +1,49 @@
-# fnroute — маршрутизатор трафика Fortnite
+# fnroute — a traffic router for Fortnite
 
-Отдельная программа: делает на одной машине то, что делает игровой роутер, —
-выбирает, через какой канал выпускать игру, помечает её трафик как трафик
-реального времени и не даёт качалкам занять исходящую очередь. Всё средствами
-самой Windows: ни драйверов, ни перехвата пакетов, ни того, на что мог бы
-обидеться Easy Anti-Cheat.
+*Русская версия: [README.ru.md](README.ru.md)*
+
+One small program that does on a single PC what a gaming router does on a
+network: it picks which link the game goes out through, marks its traffic as
+real-time, and keeps downloads from filling the upload queue.
+
+All of it through Windows itself — **no drivers, no packet interception,
+nothing that Easy Anti-Cheat could object to.** That constraint shaped the
+whole design: everything is done with routing tables, the registry and the
+built-in QoS policy, so the program never touches the game process.
 
 ```
 cargo build --release --manifest-path fnroute/Cargo.toml
 ```
 
-Получается один `fnroute.exe` без зависимостей. `probe`, `diag` и `status`
-ничего не меняют и прав администратора не требуют; `apply`, `run`, `pin` и
-`unpin` требуют — иначе Windows не отдаст ни маршруты, ни реестр, ни QoS.
+The result is a single `fnroute.exe` with no dependencies.
 
-Двойной клик по файлу открывает меню: программа консольная, и без меню окно
-закрывалось бы сразу после справки. Права администратора она запрашивает
-сама, когда выбранный пункт их требует, — открывается второе окно с обычным
-согласием Windows.
+## Order of commands
 
-## Порядок
-
-Он повторяет порядок причин, а не порядок кнопок.
+The order follows the order of causes, not the order of buttons:
 
 ```
-fnroute probe     # регион матчмейкинга — это сотни миллисекунд
-fnroute diag      # где именно набирается задержка и чинится ли это вообще
-fnroute apply     # и только теперь настройки
+fnroute probe     # matchmaking region — this is hundreds of milliseconds
+fnroute diag      # where the latency is actually added, and whether it can be fixed at all
+fnroute apply     # and only now, settings
 ```
 
-`probe` меряет время до дата-центров всех семи регионов Fortnite и говорит,
-какой ставить в игре. Это самый крупный рычаг во всём наборе: разница между
-EU и NA-East — сотня миллисекунд, разница между удачным и неудачным ключом
-реестра — единицы, и то не всегда.
+There is no point tuning QoS if the match is hosted on another continent.
+`probe` answers that first; `diag` shows which hop adds the delay; only then
+does `apply` change anything.
 
-`diag` трассирует маршрут до выбранного региона и показывает, на каком прыжке
-набежала задержка. Ответов четыре, и лечатся они разным: домашняя сеть
-(чинится этой программой), сеть провайдера (чинится звонком провайдеру),
-транзитный узел (не чинится ничем, кроме смены региона), расстояние (не
-чинится). Программа, которая пишет ключи реестра, не спросив, какой из
-четырёх случаев перед ней, с вероятностью три к одному делает вид.
+`probe`, `diag` and `status` change nothing and need no administrator
+rights. `apply`, `run`, `pin` and `unpin` do need them — Windows will not
+hand over routes, the registry or QoS otherwise. The program asks for
+elevation itself, when the chosen action needs it.
 
-`apply` применяет то, что имеет смысл: приоритет трафику игры, выбор канала
-при нескольких аплинках, MTU по измерению, снятие лимита MMCSS. Каждое
-изменение записано вместе с прежним значением в
-`%ProgramData%\fnroute\state.json`, и `fnroute revert` возвращает всё как было.
+Double-clicking the file opens a menu: it is a console program, and without
+a menu the window would close right after printing help.
 
-`run --throttle N` — фоновый режим. Пока идёт матч, качалкам (Epic, Steam,
-торренты, облачные диски) остаётся N Мбит/с; игра закрылась — потолок снят.
-Постоянный потолок был бы вредом: обновления человек качает не назло себе.
+## What it actually changes
 
-## Что здесь измеряется и чем
+- chooses the outgoing interface when the machine has more than one
+- writes a QoS policy that marks the game's packets as real-time (DSCP)
+- limits the upload queue so a background download cannot starve the game
+- pins or unpins a route, and can undo everything it did
 
-| задача | инструмент | почему так |
-|---|---|---|
-| задержка до региона | TCP-соединение на 443 | дата-центры Amazon на ping не отвечают вовсе |
-| выбор аплинка | то же, с привязкой к адресу интерфейса | «сколько отсюда, а сколько оттуда» |
-| трассировка | `IcmpSendEcho2` с ростом TTL | свой разбор вместо локализованного вывода `tracert` |
-| MTU | эхо-пробы с запретом фрагментации | двоичный поиск по размеру пакета |
-| очередь на аплинке | пакеты 32 и 1400 байт | разница — это время ожидания в очереди |
-
-Замеры не через запуск `ping.exe`: старт процесса стоит десятки миллисекунд,
-а мерим мы как раз десятки миллисекунд.
-
-## Чего программа не делает
-
-**Не перехватывает пакеты.** Настоящая приоритизация на своей машине требует
-драйвера-фильтра. Он ставит под удар аккаунт: для античита это вмешательство
-в сетевой стек игры. Обмен «−3 мс за риск бана» невыгоден, и такого режима
-здесь нет.
-
-**Не обещает, что метка DSCP сработает.** Метка — это просьба к оборудованию
-по дороге. Домашний роутер её обычно игнорирует, провайдер почти наверняка
-обнуляет. Работает она ровно в одном случае: свой же роутер с включённым WMM
-или умным QoS отдаёт помеченному трафику очередь получше — на Wi-Fi заметно,
-на кабеле почти нет. Поэтому в отчёте `apply` этот пункт помечен точкой, а не
-галочкой.
-
-**Не ставит потолок качалкам по умолчанию.** «Оставить 25%» требует знать
-ширину канала, а Windows её не знает: `LinkSpeed` адаптера — это скорость до
-роутера, а не до провайдера. Придумать число за человека значило бы с равной
-вероятностью не ограничить ничего или отрезать ему интернет.
-
-**Не чинит Wi-Fi, провайдера и расстояние.** Говорит об этом прямо, вместо
-того чтобы записать три ключа в реестр и отчитаться «готово».
-
-## Команды
-
-```
-fnroute probe            замерить все регионы и выбрать лучший
-fnroute diag             разобрать, где набирается задержка
-fnroute status           что в системе и что из этого поставили мы
-fnroute apply            применить профиль
-fnroute run              фоновый режим на время матча
-fnroute revert           вернуть всё как было
-fnroute pin <адрес>      прибить адрес к выбранному интерфейсу
-fnroute unpin            снять прибитые адреса
-
-  --region EU|NAE|NAW|BR|ME|ASIA|OCE   не искать регион, а взять этот
-  --iface <номер>                      не выбирать канал, а взять этот
-  --throttle <Мбит/с>                  потолок для качалок
-  --quick                              короткие замеры
-```
-
-`pin` нужен в одном случае: адрес игрового сервера известен точно (человек
-увидел его сам) и надо пустить игру мимо VPN. Прибивать регион целиком
-бессмысленно — адреса серверов Epic разбросаны по всему диапазону Amazon, и
-это тысячи маршрутов.
+Written in Rust. Windows only.
